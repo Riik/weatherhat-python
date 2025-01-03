@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 import weatherhat
 from weatherhat import history
 
-FPS = 10
+FPS = 1
 
 BUTTONS = [5, 6, 16, 24]
 LABELS = ["A", "B", "X", "Y"]
