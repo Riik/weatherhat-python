@@ -721,12 +721,18 @@ class DataLogger:
         self.buffer = []
         self.last_log = time.time()
         self.last_write = time.time()
-        self.log_interval_seconds = 60 
+        self.log_interval_seconds = 60
         self.write_interval_seconds = 600
+        self.acumulated_rain = 0
 
     def log(self, measurements):
         self.buffer.append(measurements)
         self.last_log = time.time()
+
+    # Ideally this wouldn't be necessary, but the rain_total keeps resetting to 0 otherwise. 
+    # I want to make sure we don't loose any volume if we log the measurements only once per minute
+    def acumulate_rain(self, rain_total):
+        self.acumulated_rain += rain_total
 
     def write_to_db(self):
         self.conn = sqlite3.connect(self.db_path)
@@ -807,19 +813,22 @@ def main():
 
     while True:
         sensordata.update(interval=5.0)
-    
-        measurements = {
-            "timestamp": datetime.now(),
-            "temperature": sensordata.temperature.latest().value,
-            "humidity": sensordata.humidity.latest().value,
-            "pressure": sensordata.pressure.latest().value,
-            "lux": sensordata.lux.latest().value,
-            "wind_speed": sensordata.wind_speed.latest_kmph(),
-            "wind_direction": sensordata.wind_direction.latest().value,
-            "rainfall_mm": sensordata.rain_total
-        }
+
+        data_logger.acumulate_rain(sensordata.rain_total)
+
         if (time.time() - data_logger.last_log) > data_logger.log_interval_seconds:
+            measurements = {
+                "timestamp": datetime.now(),
+                "temperature": sensordata.temperature.latest().value,
+                "humidity": sensordata.humidity.latest().value,
+                "pressure": sensordata.pressure.latest().value,
+                "lux": sensordata.lux.latest().value,
+                "wind_speed": sensordata.wind_speed.latest_kmph(),
+                "wind_direction": sensordata.wind_direction.latest().value,
+                "rainfall_mm": data_logger.acumulated_rain
+            }
             data_logger.log(measurements)
+            data_logger.acumulated_rain = 0
 
         if (time.time() - data_logger.last_write) > data_logger.write_interval_seconds:
             data_logger.write_to_db()
