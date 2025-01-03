@@ -3,7 +3,8 @@ import math
 import pathlib
 import select
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
+import sqlite3
 
 import gpiod
 import gpiodevice
@@ -16,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 import weatherhat
 from weatherhat import history
 
-FPS = 1
+FPS = 0.1
 
 BUTTONS = [5, 6, 16, 24]
 LABELS = ["A", "B", "X", "Y"]
@@ -714,6 +715,63 @@ class SensorData:
         self.needle_trail = self.needle_trail[-self.COMPASS_TRAIL_SIZE:]
 
 
+class DataLogger:
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.buffer = []
+        self.last_log = time.time()
+        self.last_write = time.time()
+        self.log_interval_seconds = 60 
+        self.write_interval_seconds = 600
+
+    def log(self, measurements):
+        self.buffer.append(measurements)
+        self.last_log = time.time()
+
+    def write_to_db(self):
+        self.conn = sqlite3.connect(self.db_path)
+        
+        c = self.conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS measurements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME NOT NULL,
+        temperature REAL,
+        humidity REAL,
+        pressure REAL,
+        lux REAL,
+        wind_speed REAL,
+        wind_direction REAL,
+        rainfall_mm REAL
+        );''')
+
+        insert_query = '''INSERT INTO measurements
+            (timestamp, temperature, humidity, pressure, lux, wind_speed, wind_direction, rainfall_mm)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        '''
+
+
+        c.executemany(
+            insert_query,
+            [
+                (
+                    entry['timestamp'].isoformat(),
+                    entry['temperature'],
+                    entry['humidity'],
+                    entry['pressure'],
+                    entry['lux'],
+                    entry['wind_speed'],
+                    entry['wind_direction'],
+                    entry['rainfall_mm']
+                ) for entry in self.buffer
+            ]
+        )
+
+        self.conn.commit()
+        self.conn.close()
+
+        self.buffer = []
+        self.last_write = time.time()
+
 def main():
     display = st7789.ST7789(
         rotation=90,
@@ -745,9 +803,27 @@ def main():
             ),
         )
     )
+    data_logger = DataLogger("/home/aart/measurements/measurements.db")
 
     while True:
         sensordata.update(interval=5.0)
+    
+        measurements = {
+            "timestamp": datetime.now(),
+            "temperature": sensordata.temperature.latest().value,
+            "humidity": sensordata.humidity.latest().value,
+            "pressure": sensordata.pressure.latest().value,
+            "lux": sensordata.lux.latest().value,
+            "wind_speed": sensordata.wind_speed.latest_kmph(),
+            "wind_direction": sensordata.wind_direction.latest().value,
+            "rainfall_mm": sensordata.rain_total
+        }
+        if (time.time() - data_logger.last_log) > data_logger.log_interval_seconds:
+            data_logger.log(measurements)
+
+        if (time.time() - data_logger.last_write) > data_logger.write_interval_seconds:
+            data_logger.write_to_db()
+
         viewcontroller.update()
         viewcontroller.render()
         display.display(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)).convert("RGB"))
